@@ -1,16 +1,19 @@
 import os
-import json
-import joblib
-import numpy as np
-import pandas as pd
+import csv
 
-# ── Path to the trained model ──────────────────────────────────────────────────
-MODEL_PATH = os.environ.get(
-    "MODEL_PATH",
-    r"D:\Syed Sufyan\safe_route_model.pkl"
-)
+# ── Optional ML Imports ────────────────────────────────────────────────────────
+HAS_ML = False
+try:
+    import joblib
+    import numpy as np
+    HAS_ML = True
+except ImportError:
+    pass
 
-# ── Input features (exact column order the model was trained on) ───────────────
+# ── Paths ──────────────────────────────────────────────────────────────────────
+MODEL_PATH = os.environ.get("MODEL_PATH", r"D:\Syed Sufyan\safe_route_model.pkl")
+DATASET_PATH = os.environ.get("DATASET_PATH", r"D:\Syed Sufyan\crime_master_dataset.csv")
+
 FEATURE_COLUMNS = [
     "assault_on_women_with_intent_to_outrage_her_modesty_-_incidents_(i)",
     "assault_on_women_-_i",
@@ -26,102 +29,114 @@ FEATURE_COLUMNS = [
 RISK_LABELS = ["Low", "Medium", "High"]
 RISK_SCORES = {"Low": 85, "Medium": 55, "High": 20}
 
-# ── Dataset for lookup ─────────────────────────────────────────────────────────
-DATASET_PATH = os.environ.get(
-    "DATASET_PATH",
-    r"D:\Syed Sufyan\crime_master_dataset.csv"
-)
-
 _model = None
-_df = None
 
 
 def _load_model():
     global _model
+    if not HAS_ML:
+        return None
     if _model is None:
         if os.path.exists(MODEL_PATH):
-            _model = joblib.load(MODEL_PATH)
-        else:
-            _model = None  # Will use mock prediction
+            try:
+                _model = joblib.load(MODEL_PATH)
+            except Exception:
+                _model = None
     return _model
 
 
-def _load_dataset():
-    global _df
-    if _df is None:
-        if os.path.exists(DATASET_PATH):
-            _df = pd.read_csv(DATASET_PATH)
-            _df["districts/city"] = _df["districts/city"].str.strip().str.lower()
-        else:
-            _df = pd.DataFrame()
-    return _df
+def _read_csv_dataset():
+    """Read the CSV dataset using standard library csv module."""
+    if not os.path.exists(DATASET_PATH):
+        return []
+    
+    rows = []
+    try:
+        with open(DATASET_PATH, mode="r", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                # Standardize column keys and values
+                std_row = {k.strip(): v.strip() for k, v in row.items() if k}
+                rows.append(std_row)
+    except Exception as e:
+        print(f"Error reading dataset: {e}")
+    return rows
+
+
+def _safe_float(val, default=0.0):
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return default
+
+
+def _safe_int(val, default=0):
+    try:
+        return int(float(val))
+    except (ValueError, TypeError):
+        return default
 
 
 def predict_district_risk(district_name: str) -> dict:
     """
-    Predict the risk level for a district.
-    Returns a dict with risk_level, safety_score, crime_stats, confidence.
+    Predict risk level. Uses real RF model if packages and file exist,
+    otherwise falls back to dataset lookup or mock prediction.
     """
-    df = _load_dataset()
-    model = _load_model()
-
-    # Normalise district name
+    dataset = _read_csv_dataset()
     district_key = district_name.strip().lower()
 
-    # ── Try to find district in dataset ───────────────────────────────────────
-    if not df.empty:
-        match = df[df["districts/city"] == district_key]
-        if not match.empty:
-            row = match.iloc[0]
-            risk_level = row.get("risk_level", "Medium")
-            safety_score = RISK_SCORES.get(risk_level, 50)
-            total_incidents = int(row.get("total_crime_incidents", 0))
-            severity_score = float(row.get("severity_score", 0))
-            total_crime_rate = float(row.get("total_crime_rate", 0))
+    # Find matching row in dataset
+    match = None
+    for row in dataset:
+        if row.get("districts/city", "").strip().lower() == district_key:
+            match = row
+            break
 
-            # If model is available, use it for prediction too
-            if model is not None:
-                try:
-                    feature_values = []
-                    col_map = {c: c for c in FEATURE_COLUMNS}
-                    # Map old column names
-                    col_map["rape_(sec_376)_-_i"] = "rape_(sec_376)_-_i"
-                    col_map["attempt_to_commit_rape_(sec.376/511)_-_i"] = "attempt_to_commit_rape_(sec.376/511)_-_i"
-                    for col in FEATURE_COLUMNS:
-                        feature_values.append(float(row.get(col, 0)))
-                    X = np.array(feature_values).reshape(1, -1)
-                    prediction = model.predict(X)[0]
-                    risk_level = str(prediction)
-                    safety_score = RISK_SCORES.get(risk_level, 50)
-                except Exception:
-                    pass  # Fall back to dataset risk_level
+    if match:
+        risk_level = match.get("risk_level", "Medium")
+        safety_score = RISK_SCORES.get(risk_level, 50)
+        total_incidents = _safe_int(match.get("total_crime_incidents", 0))
+        severity_score = _safe_float(match.get("severity_score", 0))
+        total_crime_rate = _safe_float(match.get("total_crime_rate", 0))
 
-            return {
-                "district": district_name,
-                "risk_level": risk_level,
-                "safety_score": safety_score,
-                "confidence": 0.92,
-                "total_incidents": total_incidents,
-                "severity_score": severity_score,
-                "total_crime_rate": round(total_crime_rate, 2),
-                "crime_breakdown": {
-                    "assault_modesty": int(row.get("assault_on_women_with_intent_to_outrage_her_modesty_-_incidents_(i)", 0)),
-                    "assault_women": int(row.get("assault_on_women_-_i", 0)),
-                    "sexual_harassment": int(row.get("sexual_harrassment_total_-_i", 0)),
-                    "disrobing": int(row.get("assault_or_use_of_criminal_force_on_women_with_intent_to_disrobe_(sec.354b_ipc)_-_i", 0)),
-                    "voyeurism": int(row.get("voyeurism_-_i", 0)),
-                    "stalking": int(row.get("stalking_-_i", 0)),
-                    "rape": int(row.get("rape_(sec_376)_-_i", 0)),
-                    "attempt_rape": int(row.get("attempt_to_commit_rape_(sec.376/511)_-_i", 0)),
-                },
-            }
+        # Try to use model if available
+        model = _load_model()
+        if model is not None and HAS_ML:
+            try:
+                features = []
+                for col in FEATURE_COLUMNS:
+                    features.append(_safe_float(match.get(col, 0.0)))
+                X = np.array(features).reshape(1, -1)
+                prediction = model.predict(X)[0]
+                risk_level = str(prediction)
+                safety_score = RISK_SCORES.get(risk_level, 50)
+            except Exception:
+                pass
 
-    # ── Mock fallback if district not found ────────────────────────────────────
+        return {
+            "district": district_name,
+            "risk_level": risk_level,
+            "safety_score": safety_score,
+            "confidence": 0.92,
+            "total_incidents": total_incidents,
+            "severity_score": severity_score,
+            "total_crime_rate": round(total_crime_rate, 2),
+            "crime_breakdown": {
+                "assault_modesty": _safe_int(match.get("assault_on_women_with_intent_to_outrage_her_modesty_-_incidents_(i)", 0)),
+                "assault_women": _safe_int(match.get("assault_on_women_-_i", 0)),
+                "sexual_harassment": _safe_int(match.get("sexual_harrassment_total_-_i", 0)),
+                "disrobing": _safe_int(match.get("assault_or_use_of_criminal_force_on_women_with_intent_to_disrobe_(sec.354b_ipc)_-_i", 0)),
+                "voyeurism": _safe_int(match.get("voyeurism_-_i", 0)),
+                "stalking": _safe_int(match.get("stalking_-_i", 0)),
+                "rape": _safe_int(match.get("rape_(sec_376)_-_i", 0)),
+                "attempt_rape": _safe_int(match.get("attempt_to_commit_rape_(sec.376/511)_-_i", 0)),
+            },
+        }
+
     return _mock_predict(district_name)
 
 
 def _mock_predict(district_name: str) -> dict:
-    """Fallback mock prediction when no dataset match is found."""
     import random
     random.seed(hash(district_name.lower()) % 10000)
     levels = ["Low", "Medium", "High"]
@@ -150,43 +165,41 @@ def _mock_predict(district_name: str) -> dict:
 
 
 def get_all_district_risks() -> list:
-    """Return risk predictions for all districts in the dataset with geographical coordinates."""
-    df = _load_dataset()
+    dataset = _read_csv_dataset()
     results = []
     
-    # Load coordinates
+    # Load coordinates from JSON
     coords = {}
     try:
         dist_path = os.path.join(os.path.dirname(__file__), "..", "data", "tn_districts.json")
         with open(dist_path, encoding="utf-8") as f:
+            import json
             d_graph = json.load(f)
             for d in d_graph.get("districts", []):
                 coords[d["name"].lower()] = (d["lat"], d["lng"])
     except Exception:
         pass
 
-    if not df.empty:
-        for _, row in df.iterrows():
-            district = row.get("districts/city", "Unknown")
-            risk = row.get("risk_level", "Medium")
-            lat, lng = coords.get(district.lower(), (11.0, 78.0)) # fallback center
-            results.append({
-                "district": district.title(),
-                "risk_level": risk,
-                "safety_score": RISK_SCORES.get(risk, 50),
-                "total_incidents": int(row.get("total_crime_incidents", 0)),
-                "severity_score": float(row.get("severity_score", 0)),
-                "total_crime_rate": round(float(row.get("total_crime_rate", 0)), 2),
-                "lat": lat,
-                "lng": lng
-            })
+    for row in dataset:
+        district = row.get("districts/city", "Unknown")
+        risk = row.get("risk_level", "Medium")
+        lat, lng = coords.get(district.lower(), (11.0, 78.0))
+        results.append({
+            "district": district.title(),
+            "risk_level": risk,
+            "safety_score": RISK_SCORES.get(risk, 50),
+            "total_incidents": _safe_int(row.get("total_crime_incidents", 0)),
+            "severity_score": _safe_float(row.get("severity_score", 0)),
+            "total_crime_rate": round(_safe_float(row.get("total_crime_rate", 0)), 2),
+            "lat": lat,
+            "lng": lng
+        })
     return results
 
 
 def get_crime_dashboard_data() -> dict:
-    """Return analytics data for the dashboard."""
-    df = _load_dataset()
-    if df.empty:
+    dataset = _read_csv_dataset()
+    if not dataset:
         return {}
 
     crime_cols = [
@@ -211,30 +224,26 @@ def get_crime_dashboard_data() -> dict:
         "Attempt to Rape",
     ]
 
-    totals = [int(df[c].sum()) for c in crime_cols if c in df.columns]
+    # Calculate totals for categories
+    totals = []
+    for col in crime_cols:
+        col_total = sum(_safe_int(row.get(col, 0)) for row in dataset)
+        totals.append(col_total)
 
-    risk_distribution = df["risk_level"].value_counts().to_dict() if "risk_level" in df.columns else {}
+    # Risk distribution
+    risk_distribution = {}
+    for row in dataset:
+        risk = row.get("risk_level", "Medium")
+        risk_distribution[risk] = risk_distribution.get(risk, 0) + 1
 
-    top_dangerous = (
-        df.nlargest(5, "total_crime_incidents")[["districts/city", "total_crime_incidents", "risk_level", "total_crime_rate"]]
-        .to_dict(orient="records")
-        if "total_crime_incidents" in df.columns
-        else []
-    )
-    top_safe = (
-        df.nsmallest(5, "total_crime_incidents")[["districts/city", "total_crime_incidents", "risk_level", "total_crime_rate"]]
-        .to_dict(orient="records")
-        if "total_crime_incidents" in df.columns
-        else []
-    )
+    # Sort districts by crime rate/incidents
+    sorted_by_incidents = sorted(dataset, key=lambda r: _safe_int(r.get("total_crime_incidents", 0)), reverse=True)
+    
+    top_dangerous = sorted_by_incidents[:5]
+    top_safe = sorted_by_incidents[-5:] if len(sorted_by_incidents) >= 5 else sorted_by_incidents
 
-    district_crime_rates = (
-        df[["districts/city", "total_crime_rate", "risk_level"]]
-        .sort_values("total_crime_rate", ascending=False)
-        .to_dict(orient="records")
-        if "total_crime_rate" in df.columns
-        else []
-    )
+    # Sort all by crime rate for trends
+    sorted_by_rate = sorted(dataset, key=lambda r: _safe_float(r.get("total_crime_rate", 0)), reverse=True)
 
     return {
         "crime_categories": {
@@ -245,29 +254,29 @@ def get_crime_dashboard_data() -> dict:
         "top_dangerous_districts": [
             {
                 "district": r["districts/city"].title(),
-                "incidents": r["total_crime_incidents"],
-                "risk_level": r["risk_level"],
-                "crime_rate": round(r["total_crime_rate"], 2),
+                "incidents": _safe_int(r.get("total_crime_incidents", 0)),
+                "risk_level": r.get("risk_level", "Medium"),
+                "crime_rate": round(_safe_float(r.get("total_crime_rate", 0)), 2),
             }
             for r in top_dangerous
         ],
         "top_safe_districts": [
             {
                 "district": r["districts/city"].title(),
-                "incidents": r["total_crime_incidents"],
-                "risk_level": r["risk_level"],
-                "crime_rate": round(r["total_crime_rate"], 2),
+                "incidents": _safe_int(r.get("total_crime_incidents", 0)),
+                "risk_level": r.get("risk_level", "Medium"),
+                "crime_rate": round(_safe_float(r.get("total_crime_rate", 0)), 2),
             }
             for r in top_safe
         ],
         "district_crime_rates": [
             {
                 "district": r["districts/city"].title(),
-                "crime_rate": round(r["total_crime_rate"], 2),
-                "risk_level": r["risk_level"],
+                "crime_rate": round(_safe_float(r.get("total_crime_rate", 0)), 2),
+                "risk_level": r.get("risk_level", "Medium"),
             }
-            for r in district_crime_rates
+            for r in sorted_by_rate
         ],
-        "total_districts": len(df),
-        "total_incidents": int(df["total_crime_incidents"].sum()) if "total_crime_incidents" in df.columns else 0,
+        "total_districts": len(dataset),
+        "total_incidents": sum(_safe_int(row.get("total_crime_incidents", 0)) for row in dataset),
     }

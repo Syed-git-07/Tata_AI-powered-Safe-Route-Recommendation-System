@@ -16,17 +16,18 @@ const TILE_DARK = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png
 const TILE_LIGHT = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
 const TILE_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>';
 
-export default function MapView({ routeData, selectedRouteId, theme, onSelectSource, onSelectDestination }) {
+export default function MapView({ routeData, selectedRouteId, theme, onSelectSource, onSelectDestination, simulating, simIdx }) {
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
   const tileRef = useRef(null);
   const routeLayerRef = useRef(null);
   const routeMarkerLayerRef = useRef(null);
   const allDistrictsLayerRef = useRef(null);
+  const simulatorLayerRef = useRef(null);
   
   const [allDistricts, setAllDistricts] = useState([]);
 
-  // Bind global functions to window so raw HTML buttons inside Leaflet Popups can trigger React state updates
+  // Bind global functions for popup buttons event handling
   useEffect(() => {
     window.setMapSource = (name) => {
       if (onSelectSource) onSelectSource(name);
@@ -60,8 +61,9 @@ export default function MapView({ routeData, selectedRouteId, theme, onSelectSou
     allDistrictsLayerRef.current = L.layerGroup().addTo(mapInstance.current);
     routeLayerRef.current = L.layerGroup().addTo(mapInstance.current);
     routeMarkerLayerRef.current = L.layerGroup().addTo(mapInstance.current);
+    simulatorLayerRef.current = L.layerGroup().addTo(mapInstance.current);
 
-    // Bind popup buttons event delegation (Leaflet popups are rendered dynamically in raw DOM)
+    // Event delegation on popupopen
     mapInstance.current.on("popupopen", (e) => {
       const container = e.popup._container;
       const setSrcBtn = container?.querySelector(".set-src-btn");
@@ -91,20 +93,20 @@ export default function MapView({ routeData, selectedRouteId, theme, onSelectSou
     };
   }, []);
 
-  // Switch tile layer on theme change
+  // Switch theme
   useEffect(() => {
     if (!tileRef.current || !mapInstance.current) return;
     tileRef.current.setUrl(theme === "dark" ? TILE_DARK : TILE_LIGHT);
   }, [theme]);
 
-  // Load all district risk coordinates from backend
+  // Load all districts
   useEffect(() => {
     api.getDistrictRisk()
       .then((data) => setAllDistricts(data.districts || []))
       .catch(() => {});
   }, []);
 
-  // Draw background district points for exploration (like Google Maps points)
+  // Draw background district exploration circles
   useEffect(() => {
     if (!mapInstance.current || !allDistricts.length) return;
     
@@ -114,12 +116,11 @@ export default function MapView({ routeData, selectedRouteId, theme, onSelectSou
       if (!d.lat || !d.lng) return;
       const color = RISK_COLORS[d.risk_level]?.hex || "#888";
 
-      // Small background point marker
       const marker = L.circleMarker([d.lat, d.lng], {
         radius: 6,
         fillColor: color,
         color: "#ffffff",
-        weight: 1,
+        weight: 1.5,
         opacity: 0.8,
         fillOpacity: 0.6,
       });
@@ -147,12 +148,13 @@ export default function MapView({ routeData, selectedRouteId, theme, onSelectSou
     });
   }, [allDistricts]);
 
-  // Draw active route on map
+  // Draw routes
   useEffect(() => {
     if (!mapInstance.current) return;
 
     routeLayerRef.current.clearLayers();
     routeMarkerLayerRef.current.clearLayers();
+    simulatorLayerRef.current.clearLayers();
 
     if (!routeData) return;
 
@@ -162,7 +164,7 @@ export default function MapView({ routeData, selectedRouteId, theme, onSelectSou
     const displayRoute = routes.find((r) => r.route_id === selectedRouteId) || routes[0];
     const allBounds = [];
 
-    // Faint overlay for alternative paths
+    // Draw alternative paths faintly
     routes
       .filter((r) => r.route_id !== displayRoute.route_id)
       .forEach((route) => {
@@ -179,7 +181,7 @@ export default function MapView({ routeData, selectedRouteId, theme, onSelectSou
         }
       });
 
-    // Draw main chosen route segments with color-coded safety risks
+    // Draw active colored segments
     const districts = displayRoute.districts;
     for (let i = 0; i < districts.length - 1; i++) {
       const a = districts[i];
@@ -195,18 +197,10 @@ export default function MapView({ routeData, selectedRouteId, theme, onSelectSou
         opacity: 0.9,
         lineCap: "round",
         lineJoin: "round",
-      }).addTo(routeLayerRef.current)
-        .bindPopup(
-          `<div style="font-family:Inter,sans-serif;min-width:150px">
-            <b style="font-size:12px;color:#333;">${a.name} → ${b.name}</b>
-            <div style="margin-top:4px;font-size:11px;color:#666;">
-              Risk: <b style="color:${color}">${a.risk_level}</b> • Score: <b>${a.safety_score}/100</b>
-            </div>
-          </div>`
-        );
+      }).addTo(routeLayerRef.current);
     }
 
-    // Active route checkpoint markers
+    // Active route checkpoint nodes
     districts.forEach((d, i) => {
       if (!d.lat || !d.lng) return;
       const color = RISK_COLORS[d.risk_level]?.hex || "#888";
@@ -257,16 +251,54 @@ export default function MapView({ routeData, selectedRouteId, theme, onSelectSou
       allBounds.push([d.lat, d.lng]);
     });
 
-    // Auto fit map coordinates zoom bounding boxes
+    // Auto zoom fit
     if (allBounds.length > 1) {
       mapInstance.current.fitBounds(allBounds, { padding: [50, 50], maxZoom: 9 });
     }
   }, [routeData, selectedRouteId]);
 
+  // Handle active navigation simulation step visualization (like Google Navigation pointer)
+  useEffect(() => {
+    if (!mapInstance.current || !simulatorLayerRef.current) return;
+    simulatorLayerRef.current.clearLayers();
+
+    if (!simulating || !routeData) return;
+    const { routes } = routeData;
+    const displayRoute = routes?.find((r) => r.route_id === selectedRouteId) || routes?.[0];
+    const currentLoc = displayRoute?.districts?.[simIdx];
+
+    if (currentLoc && currentLoc.lat && currentLoc.lng) {
+      // Focus pan to the simulated vehicle location
+      mapInstance.current.panTo([currentLoc.lat, currentLoc.lng], { animate: true });
+
+      // Pulsing green navigation marker
+      const pulseIcon = L.divIcon({
+        className: "",
+        html: `
+          <div class="nav-pulse-marker">
+            <div class="pulse-ring"></div>
+            <div class="pulse-dot"></div>
+          </div>
+        `,
+        iconSize: [30, 30],
+        iconAnchor: [15, 15],
+      });
+
+      L.marker([currentLoc.lat, currentLoc.lng], { icon: pulseIcon })
+        .addTo(simulatorLayerRef.current)
+        .bindPopup(
+          `<div style="font-family:Inter,sans-serif;font-size:12px;text-align:center;">
+             <b style="color:var(--primary);">Navigating Route</b><br>
+             Current Location: <b>${currentLoc.name}</b>
+           </div>`
+        )
+        .openPopup();
+    }
+  }, [simulating, simIdx, routeData, selectedRouteId]);
+
   return (
     <div className="map-container">
       <div ref={mapRef} className="map" />
-      {/* Map Legend overlay */}
       <div className="map-legend">
         <span className="legend-title">Risk Rating</span>
         {Object.entries(RISK_COLORS).map(([level, { hex }]) => (

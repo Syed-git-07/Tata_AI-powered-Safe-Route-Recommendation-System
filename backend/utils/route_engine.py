@@ -259,9 +259,10 @@ def _score_route(district_ids: list[str], time_of_day: str = "day", travel_mode:
         "route_tips": route_tips
     }
 
-def find_safe_routes(source: str, destination: str, time_of_day: str = "day", travel_mode: str = "driving", traveler_type: str = "standard", avoid_high_risk: bool = False) -> dict:
+def find_safe_routes(source: str, destination: str, time_of_day: str = "day", travel_mode: str = "driving", traveler_type: str = "standard", avoid_high_risk: bool = False, stopover: str = None) -> dict:
     """
-    Main entry point: returns up to 3 ranked routes from source to destination.
+    Main entry point: returns up to 3 ranked routes from source to destination,
+    optionally passing through an intermediate stopover district.
     """
     _load_graph()
 
@@ -275,7 +276,39 @@ def find_safe_routes(source: str, destination: str, time_of_day: str = "day", tr
     if src_id == dst_id:
         return {"error": "Source and destination cannot be the same district."}
 
-    raw_paths = _bfs_paths(src_id, dst_id, max_paths=3, avoid_high_risk=avoid_high_risk)
+    stop_id = None
+    if stopover and stopover.strip():
+        stop_id = _resolve_district(stopover)
+        if not stop_id:
+            return {"error": f"Stopover district '{stopover}' not found in Tamil Nadu district list."}
+        if stop_id == src_id or stop_id == dst_id:
+            return {"error": "Stopover cannot be equal to source or destination."}
+
+    # ── Path calculation logic ────────────────────────────────────────────────
+    if stop_id:
+        # Find paths from source to stopover and stopover to destination
+        paths_to_stop = _bfs_paths(src_id, stop_id, max_paths=2, avoid_high_risk=avoid_high_risk)
+        paths_from_stop = _bfs_paths(stop_id, dst_id, max_paths=2, avoid_high_risk=avoid_high_risk)
+        
+        # Combine paths
+        raw_paths = []
+        for p1 in paths_to_stop:
+            for p2 in paths_from_stop:
+                combined = p1[:-1] + p2
+                if len(combined) <= 15: # Avoid excessively long path segments
+                    raw_paths.append(combined)
+        
+        # Unique paths list
+        seen_paths = set()
+        unique_paths = []
+        for p in raw_paths:
+            t = tuple(p)
+            if t not in seen_paths:
+                seen_paths.add(t)
+                unique_paths.append(p)
+        raw_paths = unique_paths[:3] # Limit to top 3 combined paths
+    else:
+        raw_paths = _bfs_paths(src_id, dst_id, max_paths=3, avoid_high_risk=avoid_high_risk)
 
     routes = []
     for i, path in enumerate(raw_paths):
@@ -297,6 +330,7 @@ def find_safe_routes(source: str, destination: str, time_of_day: str = "day", tr
 
     src_data = _graph.get(src_id, {})
     dst_data = _graph.get(dst_id, {})
+    stop_data = _graph.get(stop_id, {}) if stop_id else None
 
     return {
         "source": {
@@ -311,6 +345,12 @@ def find_safe_routes(source: str, destination: str, time_of_day: str = "day", tr
             "lat": dst_data.get("lat", 0),
             "lng": dst_data.get("lng", 0),
         },
+        "stopover": {
+            "id": stop_id,
+            "name": stop_data.get("name", stopover) if stop_data else None,
+            "lat": stop_data.get("lat", 0) if stop_data else 0,
+            "lng": stop_data.get("lng", 0) if stop_data else 0,
+        } if stop_id else None,
         "routes": routes,
         "recommended_route": routes[0] if routes else None,
     }

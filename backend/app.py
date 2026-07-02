@@ -60,6 +60,7 @@ def safe_route():
     travel_mode = body.get("travel_mode", "driving")
     traveler_type = body.get("traveler_type", "standard")
     avoid_high_risk = body.get("avoid_high_risk", False)
+    stopover = body.get("stopover", None)
 
     result = find_safe_routes(
         source, 
@@ -67,7 +68,8 @@ def safe_route():
         time_of_day=time_of_day,
         travel_mode=travel_mode,
         traveler_type=traveler_type,
-        avoid_high_risk=avoid_high_risk
+        avoid_high_risk=avoid_high_risk,
+        stopover=stopover
     )
 
     if "error" in result:

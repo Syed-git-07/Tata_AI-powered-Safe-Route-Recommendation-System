@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from "react";
-import { Search, Navigation, Loader2, AlertCircle, Sun, Moon, Car, Footprints, User, ShieldAlert } from "lucide-react";
+import { Search, Navigation, Loader2, AlertCircle, Sun, Moon, Car, Footprints, User, ShieldAlert, Plus, X } from "lucide-react";
 import { api } from "../../services/api";
 import { TN_DISTRICTS } from "../../utils/constants";
 
-export default function RouteInput({ source, setSource, destination, setDestination, onRouteResult, onLoading }) {
+export default function RouteInput({ source, setSource, destination, setDestination, stopover, setStopover, onRouteResult, onLoading }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [showStopover, setShowStopover] = useState(false);
   
   // Custom travel preferences
   const [timeOfDay, setTimeOfDay] = useState("day");
@@ -15,10 +16,12 @@ export default function RouteInput({ source, setSource, destination, setDestinat
 
   const [srcSuggestions, setSrcSuggestions] = useState([]);
   const [dstSuggestions, setDstSuggestions] = useState([]);
+  const [stopSuggestions, setStopSuggestions] = useState([]);
   const [districts, setDistricts] = useState(TN_DISTRICTS);
   
   const srcRef = useRef(null);
   const dstRef = useRef(null);
+  const stopRef = useRef(null);
 
   useEffect(() => {
     api.getDistricts()
@@ -32,6 +35,9 @@ export default function RouteInput({ source, setSource, destination, setDestinat
       }
       if (dstRef.current && !dstRef.current.contains(e.target)) {
         setDstSuggestions([]);
+      }
+      if (stopRef.current && !stopRef.current.contains(e.target)) {
+        setStopSuggestions([]);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
@@ -53,6 +59,11 @@ export default function RouteInput({ source, setSource, destination, setDestinat
     setDstSuggestions(val.length > 1 ? filterDistricts(val) : []);
   };
 
+  const handleStopChange = (val) => {
+    setStopover(val);
+    setStopSuggestions(val.length > 1 ? filterDistricts(val) : []);
+  };
+
   const handleSubmit = async (e) => {
     if (e) e.preventDefault();
     if (!source || !destination) {
@@ -63,17 +74,23 @@ export default function RouteInput({ source, setSource, destination, setDestinat
       setError("Source and destination cannot be the same.");
       return;
     }
+    if (showStopover && stopover && (stopover.toLowerCase() === source.toLowerCase() || stopover.toLowerCase() === destination.toLowerCase())) {
+      setError("Waypoint cannot be equal to source or destination.");
+      return;
+    }
     setError(null);
     setLoading(true);
     onLoading(true);
     setSrcSuggestions([]);
     setDstSuggestions([]);
+    setStopSuggestions([]);
     try {
       const result = await api.findSafeRoute(source, destination, {
         time_of_day: timeOfDay,
         travel_mode: travelMode,
         traveler_type: travelerType,
-        avoid_high_risk: avoidHighRisk
+        avoid_high_risk: avoidHighRisk,
+        stopover: showStopover ? stopover : null
       });
       onRouteResult(result);
     } catch (err) {
@@ -88,14 +105,14 @@ export default function RouteInput({ source, setSource, destination, setDestinat
   // Trigger search when preferences or locations change
   useEffect(() => {
     if (source && destination && !loading) {
-      // Fuzzy check to make sure they are valid district inputs before auto-submitting
       const isValidSrc = districts.some(d => d.toLowerCase() === source.toLowerCase());
       const isValidDst = districts.some(d => d.toLowerCase() === destination.toLowerCase());
-      if (isValidSrc && isValidDst) {
+      const isValidStop = !showStopover || !stopover || districts.some(d => d.toLowerCase() === stopover.toLowerCase());
+      if (isValidSrc && isValidDst && isValidStop) {
         handleSubmit();
       }
     }
-  }, [source, destination, timeOfDay, travelMode, travelerType, avoidHighRisk]);
+  }, [source, destination, stopover, showStopover, timeOfDay, travelMode, travelerType, avoidHighRisk]);
 
   const swapLocations = () => {
     const temp = source;
@@ -150,6 +167,54 @@ export default function RouteInput({ source, setSource, destination, setDestinat
           </svg>
         </button>
 
+        {/* Stopover (Optional Waypoint) */}
+        {showStopover ? (
+          <div className="input-group" ref={stopRef}>
+            <label className="input-label">
+              <span className="dot" style={{ backgroundColor: "#8b5cf6" }}></span>
+              Stopover (Waypoint)
+              <button
+                type="button"
+                className="remove-waypoint-btn"
+                onClick={() => { setShowStopover(false); setStopover(""); }}
+                title="Remove Stopover"
+              >
+                <X size={12} />
+              </button>
+            </label>
+            <div className="input-wrapper">
+              <Search size={15} className="input-icon" />
+              <input
+                type="text"
+                className="route-input"
+                placeholder="Pass through (district)..."
+                value={stopover}
+                onChange={(e) => handleStopChange(e.target.value)}
+                onFocus={() => stopover.length > 1 && setStopSuggestions(filterDistricts(stopover))}
+                autoComplete="off"
+              />
+            </div>
+            {stopSuggestions.length > 0 && (
+              <ul className="suggestions">
+                {stopSuggestions.map((d) => (
+                  <li key={d} onClick={() => { setStopover(d); setStopSuggestions([]); }}>
+                    {d}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="add-waypoint-btn"
+            onClick={() => setShowStopover(true)}
+          >
+            <Plus size={12} />
+            <span>Add Waypoint</span>
+          </button>
+        )}
+
         {/* Destination */}
         <div className="input-group" ref={dstRef}>
           <label className="input-label">
@@ -179,7 +244,7 @@ export default function RouteInput({ source, setSource, destination, setDestinat
           )}
         </div>
 
-        {/* ── Travel Preferences Controls (Real World Google-Like Options) ──── */}
+        {/* ── Travel Preferences Controls ──── */}
         <div className="preferences-section">
           <label className="preferences-section-title">Routing Preferences</label>
           
