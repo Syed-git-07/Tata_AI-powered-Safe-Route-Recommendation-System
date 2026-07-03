@@ -1,5 +1,5 @@
 import { useTheme } from "../../contexts/ThemeContext";
-import { Sun, Moon, Shield, BarChart3, Map } from "lucide-react";
+import { Sun, Moon, Shield, BarChart3, Map, Brain, Search } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
 export default function Header() {
@@ -25,6 +25,14 @@ export default function Header() {
         <NavLink to="/analytics" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
           <BarChart3 size={16} />
           <span>Analytics</span>
+        </NavLink>
+        <NavLink to="/district-lookup" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
+          <Search size={16} />
+          <span>District Lookup</span>
+        </NavLink>
+        <NavLink to="/how-it-works" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
+          <Brain size={16} />
+          <span>How It Works</span>
         </NavLink>
       </nav>
 

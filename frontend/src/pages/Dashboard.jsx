@@ -3,7 +3,7 @@ import RouteInput from "../components/route/RouteInput";
 import RouteResults from "../components/route/RouteResults";
 import MapView from "../components/map/MapView";
 import { useTheme } from "../contexts/ThemeContext";
-import { ShieldAlert, Loader2, Navigation, AlertCircle, Play, Square, Volume2 } from "lucide-react";
+import { ShieldAlert, Loader2, Navigation, Play, Square, ShieldCheck, Map } from "lucide-react";
 
 export default function Dashboard() {
   const [source, setSource] = useState("");
@@ -176,10 +176,12 @@ export default function Dashboard() {
           </>
         ) : (
           <div className="sidebar-empty">
-            <ShieldAlert size={36} />
-            <h3>No Route Active</h3>
+            <div className="empty-icon-wrap">
+              <Map size={24} />
+            </div>
+            <h3>Ready to Navigate Safely</h3>
             <p>
-              Click any district point on the map to set Source/Destination, or search using intermediate stopovers.
+              Enter source &amp; destination districts, or click any point on the map to begin AI-powered route analysis.
             </p>
           </div>
         )}
